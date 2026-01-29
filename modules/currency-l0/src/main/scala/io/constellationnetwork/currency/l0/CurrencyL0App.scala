@@ -1,11 +1,11 @@
 package io.constellationnetwork.currency.l0
 
-import cats.effect.{IO, Resource}
+import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all._
 
 import scala.collection.immutable.SortedSet
 
-import io.constellationnetwork.currency.dataApplication.{BaseDataApplicationL0Service, L0NodeContext}
+import io.constellationnetwork.currency.dataApplication.{BaseDataApplicationL0Service, FeeTransaction, L0NodeContext}
 import io.constellationnetwork.currency.l0.StoragesInitializer.initializeCurrencySnapshotStorages
 import io.constellationnetwork.currency.l0.cell.{L0Cell, L0CellInput}
 import io.constellationnetwork.currency.l0.cli.method
@@ -116,6 +116,17 @@ abstract class CurrencyL0App(
 
       mkCell = (event: CurrencySnapshotEvent) => L0Cell.mkL0Cell(queues.l1Output).apply(L0CellInput.HandleCurrencySnapshotEvent(event))
 
+      snapshotFeeTransactionsRef <- Ref.of[IO, Map[Hash, Signed[FeeTransaction]]](Map.empty).toResource
+      implicit0(nodeContext: L0NodeContext[IO]) = L0NodeContext
+        .make[IO](
+          storages.snapshot,
+          hasherSelectorAlwaysCurrent,
+          storages.lastSyncGlobalSnapshot,
+          storages.identifier,
+          nodeShared.seedlist,
+          snapshotFeeTransactionsRef
+        )
+
       services <- Services
         .make[IO, Run](
           sharedConfig,
@@ -139,17 +150,10 @@ abstract class CurrencyL0App(
           maybeAllowanceList,
           nodeShared.customAllowanceList,
           mkCell,
-          Some(customArtifacts)
+          Some(customArtifacts),
+          snapshotFeeTransactionsRef
         )
         .asResource
-      implicit0(nodeContext: L0NodeContext[IO]) = L0NodeContext
-        .make[IO](
-          storages.snapshot,
-          hasherSelectorAlwaysCurrent,
-          storages.lastSyncGlobalSnapshot,
-          storages.identifier,
-          nodeShared.seedlist
-        )
 
       programs = Programs.make[IO, Run](
         keyPair,
