@@ -263,18 +263,17 @@ object DataApplicationSnapshotAcceptanceManager {
 
           sharedArtifacts = newDataState.sharedArtifacts ++ tokenUnlocks
 
-          updateHashes <- OptionT.liftF(
-            service.hashDataUpdate match {
-              case Some(hashFn) if validatedBlocks.nonEmpty =>
-                validatedBlocks.flatMap { block =>
-                  getDataUpdates(block.value.dataTransactions.toList)
-                }.traverse { signedUpdate =>
-                  hashFn(signedUpdate.value)
-                }.map(hashes => Some(hashes.toSortedSet))
-              case _ =>
-                Async[F].pure(None: Option[SortedSet[Hash]])
+          updateHashes <- OptionT.liftF {
+            val updates = validatedBlocks.flatMap { block =>
+              getDataUpdates(block.value.dataTransactions.toList)
             }
-          )
+            if (updates.nonEmpty)
+              updates.traverse { signedUpdate =>
+                service.serializeUpdate(signedUpdate.value).flatMap(Hasher[F].hashBytes)
+              }.map(hashes => Some(hashes.toSortedSet))
+            else
+              Async[F].pure(None: Option[SortedSet[Hash]])
+          }
         } yield
           DataApplicationAcceptanceResult(
             DataApplicationPart(serializedOnChainState, serializedBlocks, calculatedStateProof, updateHashes),

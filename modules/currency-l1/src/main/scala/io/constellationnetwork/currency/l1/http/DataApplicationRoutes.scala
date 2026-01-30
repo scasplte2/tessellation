@@ -112,13 +112,13 @@ final case class DataApplicationRoutes[F[_]: Async: Hasher: JsonSerializer: Secu
             signedTransaction.value match {
               case dataUpdate: DataUpdate =>
                 Signed(dataUpdate, signedTransaction.proofs)
-                  .toHashedWithSignatureCheck[F](dataApplication.serializeUpdate _)
+                  .toHashedWithSignatureCheck[F](dataApplication.serializeUpdate(_))
                   .map(_.widen[Hashed[DataTransaction]])
                   .map(_.leftMap(_.widen[DataTransaction]))
 
               case feeTransaction: FeeTransaction =>
                 Signed(feeTransaction, signedTransaction.proofs)
-                  .toHashedWithSignatureCheck[F](serialize[F] _)
+                  .toHashedWithSignatureCheck[F](JsonSerializer[F].serialize[FeeTransaction](_))
                   .map(_.widen[Hashed[DataTransaction]])
                   .map(_.leftMap(_.widen[DataTransaction]))
             }

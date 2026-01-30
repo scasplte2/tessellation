@@ -12,7 +12,6 @@ import scala.util.control.NoStackTrace
 
 import io.constellationnetwork.currency.dataApplication.DataTransaction.{DataTransactions, collectTransactions}
 import io.constellationnetwork.currency.dataApplication.Errors.Noop
-import io.constellationnetwork.currency.dataApplication.FeeTransaction.serialize
 import io.constellationnetwork.currency.dataApplication.dataApplication.{DataApplicationBlock, DataApplicationValidationErrorOr}
 import io.constellationnetwork.currency.http.Codecs.{dataTransactionsDecoder, feeTransactionResponseEncoder}
 import io.constellationnetwork.currency.schema.EstimatedFee
@@ -80,13 +79,9 @@ object DataTransaction {
       dataTransactions.toList.traverse { signedTransaction =>
         signedTransaction.value match {
           case dataUpdate: DataUpdate =>
-            Signed(dataUpdate, signedTransaction.proofs)
-              .toHashed(serializeDataUpdate)
-              .map(_.hash)
+            serializeDataUpdate(dataUpdate).flatMap(Hasher[F].hashBytes)
           case feeTransaction: FeeTransaction =>
-            Signed(feeTransaction, signedTransaction.proofs)
-              .toHashed(serialize[F])
-              .map(_.hash)
+            JsonSerializer[F].serialize(feeTransaction).flatMap(Hasher[F].hashBytes)
         }
       }.map(NonEmptyList.fromListUnsafe)
     }
@@ -109,9 +104,6 @@ case class FeeTransaction(
 
 object FeeTransaction {
   implicit val orderFeeTransaction: Order[FeeTransaction] = Order.by(_.amount)
-
-  def serialize[F[_]: Async](feeTransaction: FeeTransaction)(implicit jsonSerializer: JsonSerializer[F]): F[Array[Byte]] =
-    jsonSerializer.serialize(feeTransaction)
 
   def getFeeTransactions(dataTransactions: List[DataTransactions]): List[Signed[FeeTransaction]] =
     collectTransactions(dataTransactions) {
@@ -241,11 +233,6 @@ trait BaseDataApplicationL0ContextualOps[F[_]] extends BaseDataApplicationShared
   def setCalculatedState(ordinal: SnapshotOrdinal, state: DataCalculatedState)(implicit context: L0NodeContext[F]): F[Boolean]
 
   def hashCalculatedState(state: DataCalculatedState)(implicit context: L0NodeContext[F]): F[Hash]
-
-  def hashDataUpdate: Option[DataUpdate => F[Hash]] = None
-
-  def extractFees(ds: Seq[Signed[DataUpdate]])(implicit context: L0NodeContext[F], A: Applicative[F]): F[Seq[Signed[FeeTransaction]]] =
-    A.pure(Seq.empty)
 }
 
 trait BaseDataApplicationL1ContextualOps[F[_]] extends BaseDataApplicationSharedContextualOps[F, L1NodeContext[F]] {
@@ -267,9 +254,6 @@ trait BaseDataApplicationL0Service[F[_]] extends BaseDataApplicationService[F] w
   def onSnapshotConsensusResult(snapshot: Hashed[CurrencyIncrementalSnapshot]): F[Unit]
 
   def onGlobalSnapshotPull(snapshot: Hashed[GlobalIncrementalSnapshot], context: GlobalSnapshotInfo): F[Unit]
-
-  def extractFees(ds: Seq[Signed[DataUpdate]])(implicit A: Applicative[F]): F[Seq[Signed[FeeTransaction]]] =
-    A.pure(Seq.empty[Signed[FeeTransaction]])
 
   def getTokenUnlocks(
     state: DataState[DataOnChainState, DataCalculatedState]
@@ -336,11 +320,6 @@ trait DataApplicationL0ContextualOps[F[_], D <: DataUpdate, DON <: DataOnChainSt
   def setCalculatedState(ordinal: SnapshotOrdinal, state: DOF)(implicit context: L0NodeContext[F]): F[Boolean]
 
   def hashCalculatedState(state: DOF)(implicit context: L0NodeContext[F]): F[Hash]
-
-  def hashDataUpdate: Option[D => F[Hash]] = None
-
-  def extractFees(ds: Seq[Signed[D]])(implicit context: L0NodeContext[F], A: Applicative[F]): F[Seq[Signed[FeeTransaction]]] =
-    A.pure(Seq.empty)
 }
 
 trait DataApplicationL1ContextualOps[F[_], D <: DataUpdate, DON <: DataOnChainState, DOF <: DataCalculatedState]
@@ -492,14 +471,6 @@ object BaseDataApplicationL0ContextualOps {
           case _      => UnexpectedInput.raiseError[F, Hash]
         }
 
-      override def hashDataUpdate: Option[DataUpdate => F[Hash]] =
-        service.hashDataUpdate.map { hashFn =>
-          {
-            case d: D => hashFn(d)
-            case _    => UnexpectedInput.raiseError[F, Hash]
-          }
-        }
-
       override def validateFee(
         gsOrdinal: SnapshotOrdinal
       )(dataUpdate: Signed[DataUpdate], maybeFeeTransaction: Option[Signed[FeeTransaction]])(
@@ -507,11 +478,6 @@ object BaseDataApplicationL0ContextualOps {
         A: Applicative[F]
       ): F[DataApplicationValidationErrorOr[Unit]] =
         service.validateFee(gsOrdinal)(dataUpdate.asInstanceOf[Signed[D]], maybeFeeTransaction)
-
-      override def extractFees(
-        ds: Seq[Signed[DataUpdate]]
-      )(implicit context: L0NodeContext[F], A: Applicative[F]): F[Seq[Signed[FeeTransaction]]] =
-        service.extractFees(ds.asInstanceOf[Seq[Signed[D]]])
 
       def routes(implicit context: L0NodeContext[F]): HttpRoutes[F] = service.routes
 
@@ -674,11 +640,6 @@ object BaseDataApplicationL0Service {
       ): F[DataApplicationValidationErrorOr[Unit]] =
         ctx.validateFee(gsOrdinal)(dataUpdate, maybeFeeTransaction)
 
-      override def extractFees(
-        ds: Seq[Signed[DataUpdate]]
-      )(implicit context: L0NodeContext[F], A: Applicative[F]): F[Seq[Signed[FeeTransaction]]] =
-        ctx.extractFees(ds)
-
       def combine(state: DataState.Base, updates: List[Signed[DataUpdate]])(
         implicit context: L0NodeContext[F]
       ): F[DataState.Base] =
@@ -692,9 +653,6 @@ object BaseDataApplicationL0Service {
 
       def hashCalculatedState(state: DataCalculatedState)(implicit context: L0NodeContext[F]): F[Hash] =
         ctx.hashCalculatedState(state)
-
-      override def hashDataUpdate: Option[DataUpdate => F[Hash]] =
-        ctx.hashDataUpdate
 
       def calculatedStateDecoder: Decoder[DataCalculatedState] = base.calculatedStateDecoder
 

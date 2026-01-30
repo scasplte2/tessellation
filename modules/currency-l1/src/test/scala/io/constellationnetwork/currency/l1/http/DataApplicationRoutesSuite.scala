@@ -485,8 +485,8 @@ object DataApplicationRoutesSuite extends HttpSuite {
             amount = Amount(NonNegLong(1L)),
             dataUpdateRef = updateHash
           )
-          signedFeeTransaction <- signDataTransaction[FeeTransaction](feeTransaction, keypair, FeeTransaction.serialize[IO])
-          feeTransactionHash <- FeeTransaction.serialize[IO](feeTransaction).map(Hash.fromBytes)
+          signedFeeTransaction <- signDataTransaction[FeeTransaction](feeTransaction, keypair, JsonSerializer[F].serialize)
+          feeTransactionHash <- JsonSerializer[IO].serialize(feeTransaction).map(Hash.fromBytes)
 
           endpoint <- construct(dataQueue, l1Service, defaultGlobalSnapshotStorage, mocked)
 
@@ -569,7 +569,7 @@ object DataApplicationRoutesSuite extends HttpSuite {
             amount = Amount(NonNegLong(1L)),
             dataUpdateRef = updateHash
           )
-          signedFeeTransaction <- signDataTransaction[FeeTransaction](feeTransaction, keypair, FeeTransaction.serialize[IO])
+          signedFeeTransaction <- signDataTransaction[FeeTransaction](feeTransaction, keypair, JsonSerializer[F].serialize)
           endpoint <- construct(dataQueue, l1Service, defaultGlobalSnapshotStorage, mocked)
 
           dataTransaction = DataTransactionRequest(
@@ -660,7 +660,7 @@ object DataApplicationRoutesSuite extends HttpSuite {
             amount = Amount(NonNegLong(1L)),
             dataUpdateRef = updateHash
           )
-          signedFeeTransaction <- signDataTransaction[FeeTransaction](feeTransaction, keypair, FeeTransaction.serialize[IO])
+          signedFeeTransaction <- signDataTransaction[FeeTransaction](feeTransaction, keypair, JsonSerializer[F].serialize)
           endpoint <- construct(dataQueue, l1Service, defaultGlobalSnapshotStorage, mocked)
 
           dataTransaction = DataTransactionRequest(
@@ -755,7 +755,7 @@ object DataApplicationRoutesSuite extends HttpSuite {
             amount = Amount(NonNegLong(1L)),
             dataUpdateRef = updateHash
           )
-          signedFeeTransaction <- signDataTransaction[FeeTransaction](feeTransaction, keypair, FeeTransaction.serialize[IO])
+          signedFeeTransaction <- signDataTransaction[FeeTransaction](feeTransaction, keypair, JsonSerializer[F].serialize)
           invalidSignedFeeTransaction = Signed(feeTransaction2, signedFeeTransaction.proofs)
           endpoint <- construct(dataQueue, l1Service, defaultGlobalSnapshotStorage, mocked)
 
