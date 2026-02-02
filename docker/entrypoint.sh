@@ -30,8 +30,11 @@ EOF
         echo "Join response: $response"
         if [ "$response" == "failure" ]; then
           echo "Join failed, retrying..."
-        elif [ "$response" == *"does not allow for joining the cluster"* ]; then
-          echo "Join completed"
+        elif [ -z "$response" ]; then
+          echo "Join successful (empty response = HTTP 200 OK)"
+          break
+        elif [[ "$response" == *"does not allow for joining the cluster"* ]]; then
+          echo "Join completed (node already in cluster)"
           break
         else
           echo "Join not obvious failure, retrying..."
@@ -170,6 +173,31 @@ echo "JAR_PATH: $JAR_PATH"
 if [ ! -f "$JAR_PATH" ]; then
   echo "Error: $JAR_PATH does not exist"
   exit 1
+fi
+
+# For L1 layers in genesis mode, wait for the L0 layer to be ready
+# This prevents race conditions where L1 tries to discover L0 peers before L0 has created its session
+if [ "$L0" == "false" ] && [ "$CL_DOCKER_GENESIS" == "true" ]; then
+  L0_READY_TIMEOUT=${CL_DOCKER_L0_READY_TIMEOUT:-120}
+  L0_READY_INTERVAL=${CL_DOCKER_L0_READY_INTERVAL:-5}
+  L0_URL="http://${CL_L0_PEER_HTTP_HOST}:${CL_L0_PEER_HTTP_PORT}/node/health"
+
+  echo "L1 genesis mode: waiting for L0 layer at $L0_URL (timeout: ${L0_READY_TIMEOUT}s)..."
+
+  elapsed=0
+  while [ $elapsed -lt $L0_READY_TIMEOUT ]; do
+    if curl -sf "$L0_URL" > /dev/null 2>&1; then
+      echo "L0 layer is ready after ${elapsed}s"
+      break
+    fi
+    echo "L0 not ready yet, waiting... (${elapsed}s/${L0_READY_TIMEOUT}s)"
+    sleep $L0_READY_INTERVAL
+    elapsed=$((elapsed + L0_READY_INTERVAL))
+  done
+
+  if [ $elapsed -ge $L0_READY_TIMEOUT ]; then
+    echo "Warning: L0 layer did not become ready within ${L0_READY_TIMEOUT}s, proceeding anyway..."
+  fi
 fi
 
 if [ "$RUN_MAIN" == "true" ]; then

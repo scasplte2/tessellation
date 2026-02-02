@@ -24,6 +24,7 @@ import io.constellationnetwork.node.shared.domain.tokenlock.{ContextualTokenLock
 import io.constellationnetwork.node.shared.infrastructure.snapshot.storage.LastSnapshotStorage
 import io.constellationnetwork.schema._
 import io.constellationnetwork.schema.address.Address
+import io.constellationnetwork.schema.mpt.GlobalStateConverter.syntax._
 import io.constellationnetwork.schema.mpt.{GlobalStateKey, MptStore}
 import io.constellationnetwork.schema.swap.{AllowSpendReference, CurrencyId}
 import io.constellationnetwork.schema.tokenLock.TokenLockReference
@@ -82,14 +83,16 @@ object CurrencySnapshotProcessor {
                   .setInitialFetchingGL0(globalSnapshot, globalState, l0Service.asLeft.some, none)
                   .as[SnapshotProcessingResult](DownloadPerformed(globalSnapshotReference, Set.empty, Set.empty))
 
-                processCurrencySnapshots(
-                  globalSnapshot,
-                  globalState,
-                  globalSnapshotReference,
-                  setGlobalSnapshot,
-                  setNGlobalSnapshots,
-                  getGlobalSnapshotByOrdinal
-                )
+                // Sync mptStore with GlobalSnapshotInfo entries for L1 state proof validation
+                globalState.allStateEntries[F].flatMap(mptStore.sync[Json](_, globalSnapshot.ordinal)) >>
+                  processCurrencySnapshots(
+                    globalSnapshot,
+                    globalState,
+                    globalSnapshotReference,
+                    setGlobalSnapshot,
+                    setNGlobalSnapshots,
+                    getGlobalSnapshotByOrdinal
+                  )
 
               case _ => (new Throwable("unexpected state")).raiseError[F, SnapshotProcessingResult]
             }
@@ -113,14 +116,16 @@ object CurrencySnapshotProcessor {
                         .set(globalSnapshot, state)
                         .as[SnapshotProcessingResult](DownloadPerformed(globalSnapshotReference, Set.empty, Set.empty))
 
-                      processCurrencySnapshots(
-                        globalSnapshot,
-                        state,
-                        globalSnapshotReference,
-                        setGlobalSnapshot,
-                        setNGlobalSnapshots,
-                        getGlobalSnapshotByOrdinal
-                      )
+                      // Sync mptStore with GlobalSnapshotInfo entries for L1 state proof validation
+                      state.allStateEntries[F].flatMap(mptStore.sync[Json](_, globalSnapshot.ordinal)) >>
+                        processCurrencySnapshots(
+                          globalSnapshot,
+                          state,
+                          globalSnapshotReference,
+                          setGlobalSnapshot,
+                          setNGlobalSnapshots,
+                          getGlobalSnapshotByOrdinal
+                        )
 
                     }
 
