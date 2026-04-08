@@ -125,8 +125,12 @@ object slot {
   @derive(decoder, encoder, eqv, show)
   case class SlotCertificate(
     slot: Slot,
+    parentSlot: Slot, // slot of parent snapshot — verifier uses this to compute slot gap
     vrfProof: VrfProof,
+    vrfOutput: VrfOutput,
     vrfPublicKey: VrfPublicKey,
-    eta: Hash
+    eta: Hash,
+    activePoolSize: Int,
+    activePoolHash: Hash
   )
 }

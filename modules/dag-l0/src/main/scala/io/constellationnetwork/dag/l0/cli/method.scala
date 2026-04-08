@@ -175,6 +175,91 @@ object method {
     }
   }
 
+  /** Nakamoto consensus mode: all nodes load genesis identically and start VRF production. No leader/follower distinction. Uses a shared
+    * genesis key so all nodes produce the same signed genesis artifact.
+    */
+  case class RunNakamoto(
+    keyStore: StorePath,
+    alias: KeyAlias,
+    password: Password,
+    dbConfig: DBConfig,
+    httpConfig: HttpConfig,
+    environment: AppEnvironment,
+    genesisPath: Path,
+    seedlistPath: Option[SeedListPath],
+    collateralAmount: Option[Amount],
+    startingEpochProgress: EpochProgress,
+    trustRatingsPath: Option[Path],
+    prioritySeedlistPath: Option[SeedListPath],
+    allowanceListPath: Option[AllowanceListPath]
+  ) extends Run {}
+
+  object RunNakamoto extends WithOpts[RunNakamoto] {
+
+    val opts: Opts[RunNakamoto] = Opts.subcommand("run-nakamoto", "Run Nakamoto consensus mode (shared genesis, VRF production)") {
+      (
+        StorePath.opts,
+        KeyAlias.opts,
+        Password.opts,
+        db.opts,
+        http.opts,
+        AppEnvironment.opts,
+        genesisPathOpts,
+        SeedListPath.opts,
+        CollateralAmountOpts.opts,
+        RunGenesis.startingEpochProgressOpts,
+        trustRatingsPathOpts,
+        SeedListPath.priorityOpts,
+        AllowanceListPath.opts
+      ).mapN(RunNakamoto.apply)
+    }
+  }
+
+  /** Nakamoto validator mode: join an existing Nakamoto chain by downloading the latest snapshot from a peer. After catching up, starts VRF
+    * production.
+    */
+  case class RunNakamotoValidator(
+    keyStore: StorePath,
+    alias: KeyAlias,
+    password: Password,
+    dbConfig: DBConfig,
+    httpConfig: HttpConfig,
+    environment: AppEnvironment,
+    seedlistPath: Option[SeedListPath],
+    collateralAmount: Option[Amount],
+    trustRatingsPath: Option[Path],
+    prioritySeedlistPath: Option[SeedListPath],
+    allowanceListPath: Option[AllowanceListPath],
+    peerToJoin: String // HTTP URL of peer to download from, e.g. "http://node-0:9000"
+  ) extends Run {}
+
+  object RunNakamotoValidator extends WithOpts[RunNakamotoValidator] {
+    private val peerOpts: Opts[String] =
+      Opts.option[String]("nakamoto-peer", "HTTP URL of a Nakamoto peer to download chain from")
+
+    val opts: Opts[RunNakamotoValidator] =
+      Opts.subcommand("run-nakamoto-validator", "Join an existing Nakamoto chain by downloading from a peer") {
+        (
+          StorePath.opts,
+          KeyAlias.opts,
+          Password.opts,
+          db.opts,
+          http.opts,
+          AppEnvironment.opts,
+          SeedListPath.opts,
+          CollateralAmountOpts.opts,
+          trustRatingsPathOpts,
+          SeedListPath.priorityOpts,
+          AllowanceListPath.opts,
+          peerOpts
+        ).mapN(RunNakamotoValidator.apply)
+      }
+  }
+
   val opts: Opts[Run] =
-    RunGenesis.opts.orElse(RunValidator.opts).orElse(RunRollback.opts)
+    RunGenesis.opts
+      .orElse(RunValidator.opts)
+      .orElse(RunRollback.opts)
+      .orElse(RunNakamoto.opts)
+      .orElse(RunNakamotoValidator.opts)
 }

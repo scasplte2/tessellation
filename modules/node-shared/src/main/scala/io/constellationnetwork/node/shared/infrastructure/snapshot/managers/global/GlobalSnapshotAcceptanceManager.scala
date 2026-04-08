@@ -172,7 +172,8 @@ object GlobalSnapshotAcceptanceManager {
     collateral: Amount,
     withdrawalTimeLimit: EpochProgress,
     mptStore: MptStore[F, GlobalStateKey],
-    loggerBundle: LoggerBundle[F]
+    loggerBundle: LoggerBundle[F],
+    undoJournal: Option[io.constellationnetwork.node.shared.domain.nakamoto.MptUndoJournal[F]] = None
   )(
     implicit globalStateProofSelector: GlobalStateProofSelector
   ): GlobalSnapshotAcceptanceManager[F] = {
@@ -1137,21 +1138,65 @@ object GlobalSnapshotAcceptanceManager {
                 s"nc=${removedNodeCollateralKeys.size},ncw=${removedNodeCollateralWithdrawalKeys.size})"
             )
 
-            _ <- mptStore.syncFromStateChanges(stateChangesAccumulator, ordinal)
-            stateProof <- builder.buildProof(gsi, ordinal)
+            // === MPT Sync with undo journal ===
+            // When undo journal is present: wrap the sync to record before/after state,
+            // enabling O(delta × fork_depth) rollback instead of O(state_size) full rebuild.
+            syncAction = mptStore.syncFromStateChanges(stateChangesAccumulator, ordinal)
+            _ <- undoJournal match {
+              case Some(journal) =>
+                journal.wrapApply(
+                  ordinal.value.value,
+                  io.constellationnetwork.security.hash.Hash(ordinal.value.value.toString),
+                  io.constellationnetwork.security.hash.Hash.empty
+                )(syncAction)
+              case None =>
+                syncAction
+            }
+            incrementalProof <- builder.buildProof(gsi, ordinal)
 
-            _ <- loggerBundle.app.info(
-              s"[ACCEPTANCE] ordinal=$ordinal EXIT stateProof: " +
-                s"mptRoot=${stateProof.mptRoot.map(_.show.take(12)).getOrElse("none")} " +
-                s"balances=${stateProof.balancesProof.show.take(12)} " +
-                s"txRefs=${stateProof.lastTxRefsProof.show.take(12)} " +
-                s"scHashes=${stateProof.lastStateChannelSnapshotHashesProof.show.take(12)} " +
-                s"delegStakes=${stateProof.activeDelegatedStakes.map(_.show.take(12)).getOrElse("none")} " +
-                s"delegWithdrawals=${stateProof.delegatedStakesWithdrawals.map(_.show.take(12)).getOrElse("none")} " +
-                s"nodeCollaterals=${stateProof.activeNodeCollaterals.map(_.show.take(12)).getOrElse("none")} " +
-                s"collateralWithdrawals=${stateProof.nodeCollateralWithdrawals.map(_.show.take(12)).getOrElse("none")} " +
-                s"gsi.balances=${gsi.balances.size} gsi.currSnapshots=${gsi.lastCurrencySnapshots.size}"
-            )
+            // Verify incremental vs full-rebuild for correctness.
+            // With undo journal: divergence should be impossible (journal tracks mutations).
+            // Without journal: self-healing full resync on divergence.
+            incrementalRoot = incrementalProof.mptRoot.map(_.show).getOrElse("none")
+            verifyProof <- GlobalSnapshotInfo.mptStateProof[F](gsi)
+            verifyRoot = verifyProof.mptRoot.map(_.show).getOrElse("none")
+
+            stateProof <-
+              if (incrementalRoot == verifyRoot) {
+                loggerBundle.app
+                  .info(
+                    s"[ACCEPTANCE] ordinal=$ordinal stateProof: mptRoot=${incrementalRoot.take(12)} " +
+                      s"mptConsistency=MATCH " +
+                      s"gsi.balances=${gsi.balances.size} gsi.currSnapshots=${gsi.lastCurrencySnapshots.size}"
+                  )
+                  .as(incrementalProof)
+              } else {
+                // Fork switch detected — stateRef is polluted from abandoned branch.
+                for {
+                  allEntries <- gsi.allStateEntries[F]
+                  _ <- loggerBundle.app.warn(
+                    s"[ACCEPTANCE] ordinal=$ordinal stateProof: mptConsistency=DIVERGED " +
+                      s"incremental=${incrementalRoot.take(12)} rebuild=${verifyRoot.take(12)} " +
+                      s"ACTION=full_resync entries=${allEntries.size} " +
+                      s"gsi.balances=${gsi.balances.size} gsi.currSnapshots=${gsi.lastCurrencySnapshots.size}"
+                  )
+                  _ <- mptStore.syncFull(allEntries, ordinal)
+                  healedProof <- builder.buildProof(gsi, ordinal)
+                  healedRoot = healedProof.mptRoot.map(_.show).getOrElse("none")
+                  _ <-
+                    if (healedRoot == verifyRoot)
+                      loggerBundle.app.info(
+                        s"[ACCEPTANCE] ordinal=$ordinal MPT healed: mptRoot=${healedRoot.take(12)} MATCH after resync"
+                      )
+                    else
+                      loggerBundle.app.error(
+                        s"[ACCEPTANCE] ordinal=$ordinal MPT STILL DIVERGED after resync: " +
+                          s"healed=${healedRoot.take(12)} expected=${verifyRoot.take(12)}"
+                      )
+                  // Also reset journal state after full resync
+                  _ <- undoJournal.traverse_(_.pruneBelow(ordinal.value.value))
+                } yield verifyProof
+              }
 
             (expiredAllowSpends, expiredTokenLocks) = (
               allowSpendStateManager.filterExpiredAllowSpends(
